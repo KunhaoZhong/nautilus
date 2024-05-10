@@ -329,6 +329,8 @@ class Sampler():
         self.blobs_t = None
         self.cobaya_mpi = cobaya_mpi # KZ: cobaya style mpi or not
         
+        # this seems to need to be protected (only rank 0 runs)
+        # protected means only rank0 runs
         self.filepath = filepath
         if resume and filepath is not None and Path(filepath).exists():
             with h5py.File(filepath, 'r') as fstream:
@@ -415,94 +417,131 @@ class Sampler():
             limits were reached and True otherwise.
 
         """
-        t_start = time()
+        #VM BEGINS
+        if rank 0:
+            t_start = time()
 
-        if verbose:
-            print('Starting the nautilus sampler...')
-            print('Please report issues at github.com/johannesulf/nautilus.')
-            self.print_status(header=True)
+            if verbose:
+                print('Starting the nautilus sampler...')
+                print('Please report issues at github.com/johannesulf/nautilus.')
+                self.print_status(header=True)
 
-        if len(self.bounds) == 0:
-            self.add_bound()
-            self.n_update_iter = -self.n_live
-            self.n_like_iter = 0
-
-        success = (self.explored and np.all(self.shell_n >= n_shell) and
-                   self.n_eff >= n_eff)
-
-        while ((self.n_like < n_like_max) and (time() - t_start < timeout) and
-               not success):
-
-            if not self.explored:
-
-                if ((self.n_update_iter >= self.n_update or
-                     self.n_like_iter >= self.n_like_new_bound) and
-                        np.sum(self.shell_n) > self.n_live):
-                    self.add_bound(verbose=verbose)
-                    self.n_update_iter = 0
-                    self.n_like_iter = 0
-                    if self.filepath is not None:
-                        self.write(self.filepath, overwrite=True)
-
-                self.n_update_iter += self.add_samples(-1, verbose=verbose)
-                self.n_like_iter += self.n_batch
-                if self.filepath is not None:
-                    # Write the complete file if this is the first batch.
-                    if self.n_like == self.n_batch:
-                        self.write(self.filepath, overwrite=True)
-                    self.write_shell_update(self.filepath, -1)
-
-                if self.f_live <= f_live:
-
-                    # If some shells are unoccupied in the end, remove them.
-                    # They will contain close to 0 volume and may never yield a
-                    # point when trying to sample from them.
-                    if np.any(self.shell_n == 0):
-                        for shell in np.flatnonzero(self.shell_n == 0)[::-1]:
-                            self.bounds.pop(shell)
-                            self.points.pop(shell)
-                            self.log_l.pop(shell)
-                            if self.blobs is not None:
-                                self.blobs.pop(shell)
-                            for key in ['shell_n', 'shell_n_sample',
-                                        'shell_n_eff', 'shell_log_l_min',
-                                        'shell_log_l', 'shell_log_v']:
-                                setattr(self, key, np.delete(
-                                    getattr(self, key), shell))
-
-                    self.shell_n_sample_exp = np.copy(self.shell_n_sample)
-                    self.shell_end_exp = np.array(
-                        [len(p) for p in self.points])
-
-                    self.explored = True
-                    self.discard_exploration = discard_exploration
-                    if self.filepath is not None:
-                        self.write(self.filepath, overwrite=True)
-
-            elif np.any(self.shell_n < n_shell):
-                shell = np.flatnonzero(self.shell_n < n_shell)[0]
-                self.add_samples(shell, verbose=verbose)
-                if self.filepath is not None:
-                    self.write_shell_update(self.filepath, shell)
-
-            elif self.n_eff < n_eff:
-                shell = np.argmax(self.shell_log_l + self.shell_log_v -
-                                  0.5 * np.log(self.shell_n) -
-                                  0.5 * np.log(self.shell_n_eff))
-                self.add_samples(shell, verbose=verbose)
-                if self.filepath is not None:
-                    self.write_shell_update(self.filepath, shell)
+            if len(self.bounds) == 0:
+                self.add_bound()
+                self.n_update_iter = -self.n_live
+                self.n_like_iter = 0
 
             success = (self.explored and np.all(self.shell_n >= n_shell) and
                        self.n_eff >= n_eff)
 
-        if verbose:
-            if success:
-                self.print_status('Finished')
-            else:
-                self.print_status('Stopped')
+            while ((self.n_like < n_like_max) and (time() - t_start < timeout) and
+                   not success):
 
-        return success
+                if not self.explored:
+
+                    if ((self.n_update_iter >= self.n_update or
+                         self.n_like_iter >= self.n_like_new_bound) and
+                            np.sum(self.shell_n) > self.n_live):
+                        self.add_bound(verbose=verbose)
+                        self.n_update_iter = 0
+                        self.n_like_iter = 0
+                        if self.filepath is not None:
+                            self.write(self.filepath, overwrite=True)
+
+                    self.n_update_iter += self.add_samples(-1, verbose=verbose)
+                    self.n_like_iter += self.n_batch
+                    if self.filepath is not None:
+                        # Write the complete file if this is the first batch.
+                        if self.n_like == self.n_batch:
+                            self.write(self.filepath, overwrite=True)
+                        self.write_shell_update(self.filepath, -1)
+
+                    if self.f_live <= f_live:
+
+                        # If some shells are unoccupied in the end, remove them.
+                        # They will contain close to 0 volume and may never yield a
+                        # point when trying to sample from them.
+                        if np.any(self.shell_n == 0):
+                            for shell in np.flatnonzero(self.shell_n == 0)[::-1]:
+                                self.bounds.pop(shell)
+                                self.points.pop(shell)
+                                self.log_l.pop(shell)
+                                if self.blobs is not None:
+                                    self.blobs.pop(shell)
+                                for key in ['shell_n', 'shell_n_sample',
+                                            'shell_n_eff', 'shell_log_l_min',
+                                            'shell_log_l', 'shell_log_v']:
+                                    setattr(self, key, np.delete(
+                                        getattr(self, key), shell))
+
+                        self.shell_n_sample_exp = np.copy(self.shell_n_sample)
+                        self.shell_end_exp = np.array(
+                            [len(p) for p in self.points])
+
+                        self.explored = True
+                        self.discard_exploration = discard_exploration
+                        if self.filepath is not None:
+                            self.write(self.filepath, overwrite=True)
+
+                elif np.any(self.shell_n < n_shell):
+                    shell = np.flatnonzero(self.shell_n < n_shell)[0]
+                    self.add_samples(shell, verbose=verbose)
+                    if self.filepath is not None:
+                        self.write_shell_update(self.filepath, shell)
+
+                elif self.n_eff < n_eff:
+                    shell = np.argmax(self.shell_log_l + self.shell_log_v -
+                                      0.5 * np.log(self.shell_n) -
+                                      0.5 * np.log(self.shell_n_eff))
+                    self.add_samples(shell, verbose=verbose)
+                    if self.filepath is not None:
+                        self.write_shell_update(self.filepath, shell)
+
+                success = (self.explored and np.all(self.shell_n >= n_shell) and
+                           self.n_eff >= n_eff)
+
+                #VM 
+                #if no success
+                    #for (int i =1 ; i< MPI_RANK; i++)
+                    #{
+                        #MPI_SEND(FALSE, from rank 0, tag = 2)
+                    #}
+
+            #for (int i =1 ; i< MPI_RANK; i++)
+            #{
+                #MPI_SEND(TRUE, from rank 0, tag = 2)
+            #}
+            if verbose:
+                if success:
+                    self.print_status('Finished')
+                else:
+                    self.print_status('Stopped')
+
+            return success
+        else:
+            # all the other ranks
+            # they receit args from a MPI_bdcast, they run the likes a assigned to them 
+            # then they MPI send their results to rank 0
+            #x = false
+            #while (x = False)
+                #VM MPI_RECEIV ARGS FROM RANK 0
+                # create an args, and results numpy array
+                # MPI_RECEIV(TAG = 0)
+                # NOW - HERE THEY ARE GOING TO EVALUATE THEIR LIKELIHOODS
+                
+                #int m = n_live/n_mpi_workers
+                #for (int i = MPI_RANK; i = i + m; i < n_live)
+                #{
+                #    results[i] = self.likelihood(args[i])
+                #}
+
+                # NOW WE SEND THE RESULTS BACK TO ZERO
+                #for (int i = MPI_RANK; i = i + m; i < n_live)
+                #{
+                #    MPI_SEND(results[i] , to rank 0, TAG = 1)
+                #}
+
+                #MPI_RECEIV(x, from rank 0, tag = 2)
 
     @property
     def discard_exploration(self):
@@ -885,6 +924,24 @@ class Sampler():
                 args = np.arange(n_elements)
             else:
                 args = None
+
+            #VM RANK0 MPI SEND ARGS WITH TAG = 0 TO ALL OTHER RANKS
+            #MPI_SEND(TAG = 0)
+
+            # rank 0 all do some likelihood evaluations
+            #for (int i = MPI_RANK; i = i + m; i < n_live)
+            #{
+            #    results[i] = self.likelihood(args[i])
+            #}
+
+            # now ranks 0 receive all the results from the other ranks
+            #for (int i =1 ; i< MPI_RANK; i++)
+            #{
+            #  for (int j = i; j = j + m; j < n_live)
+            #  {
+            #        MPI_RECEIVE(results[j], TAG = 1)
+            #   }
+            #}            
 
             # Broadcast the entire data array from the root to all processes
             print('kz tesitng bcast start')
