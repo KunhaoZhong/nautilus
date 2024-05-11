@@ -965,11 +965,11 @@ class Sampler():
                 tmp = self.comm.recv(source=worker_rank, tag=11)
                 tmp_start, tmp_end = get_start_end_idx_mpi(worker_rank, remainder, chunk_size)
                 results_global[tmp_start: tmp_end] = tmp
-                print('kz test results rank {}, logl {}'.format(worker_rank, tmp))
+                print('kz test results rank {}, logl {}'.format(worker_rank, tmp[0]))
                 
             # KZ: to make other part of the code happy
             result = results_global.tolist()
-            print('kz testing', result[0], results[100], results[100])
+            print('kz testing', result[0], result[100], result[100])
 
 
         else:
