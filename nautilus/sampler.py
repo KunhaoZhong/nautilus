@@ -1,5 +1,11 @@
 """Module implementing the Nautilus sampler."""
 
+
+"""
+    Kunhao Zhong: added MPI that is compatible with cobaya.
+    For minimal change of the main code, we mainly use point-to-point communication, and only parallelize the likelihood evaluation. The tag feature of Send and Recv makes the logic between different functions a bit more clear, although it might not be the best numerical solution.
+"""
+
 try:
     import h5py
 except ImportError:
@@ -19,8 +25,9 @@ from .bounds import UnitCube, NautilusBound
 from .pool import initialize_worker, likelihood_worker, pool_size
 
 from cobaya.mpi import share_mpi, more_than_one_process, is_main_process, \
-    get_mpi_rank, sync_processes, get_mpi, get_mpi_size
+get_mpi_rank, sync_processes, get_mpi, get_mpi_size
 from cobaya import mpi
+
 
 
 class Sampler():
@@ -328,52 +335,56 @@ class Sampler():
         self.log_l_t = np.zeros(0)
         self.blobs_t = None
         self.cobaya_mpi = cobaya_mpi # KZ: cobaya style mpi or not
-        
-        # this seems to need to be protected (only rank 0 runs)
-        # protected means only rank0 runs
+        if cobaya_mpi:
+            self.MPI = get_mpi()
+            self.size = get_mpi_size()
+            self.comm = self.MPI.COMM_WORLD
         self.filepath = filepath
-        if resume and filepath is not None and Path(filepath).exists():
-            with h5py.File(filepath, 'r') as fstream:
+        
+        if is_main_process(): # KZ protect the files for resuming
+            
+            if resume and filepath is not None and Path(filepath).exists():
+                with h5py.File(filepath, 'r') as fstream:
 
-                group = fstream['sampler']
+                    group = fstream['sampler']
 
-                self.rng.bit_generator.state = dict(
-                    bit_generator='PCG64',
-                    state=dict(
-                        state=int(group.attrs['rng_state']),
-                        inc=int(group.attrs['rng_inc'])),
-                    has_uint32=group.attrs['rng_has_uint32'],
-                    uinteger=group.attrs['rng_uinteger'])
+                    self.rng.bit_generator.state = dict(
+                        bit_generator='PCG64',
+                        state=dict(
+                            state=int(group.attrs['rng_state']),
+                            inc=int(group.attrs['rng_inc'])),
+                        has_uint32=group.attrs['rng_has_uint32'],
+                        uinteger=group.attrs['rng_uinteger'])
 
-                for key in ['n_like', 'explored', '_discard_exploration',
-                            'shell_n', 'shell_n_sample', 'shell_n_eff',
-                            'shell_log_l_min', 'shell_log_l', 'shell_log_v',
-                            'shell_n_sample_exp', 'shell_end_exp',
-                            'n_update_iter', 'n_like_iter']:
-                    setattr(self, key, group.attrs[key])
+                    for key in ['n_like', 'explored', '_discard_exploration',
+                                'shell_n', 'shell_n_sample', 'shell_n_eff',
+                                'shell_log_l_min', 'shell_log_l', 'shell_log_v',
+                                'shell_n_sample_exp', 'shell_end_exp',
+                                'n_update_iter', 'n_like_iter']:
+                        setattr(self, key, group.attrs[key])
 
-                for shell in range(len(self.shell_n)):
-                    self.points.append(
-                        np.array(group['points_{}'.format(shell)]))
-                    self.log_l.append(
-                        np.array(group['log_l_{}'.format(shell)]))
-                    if 'blobs_{}'.format(shell) in group:
-                        if shell == 0:
-                            self.blobs = []
-                        self.blobs.append(
-                            np.array(group['blobs_{}'.format(shell)]))
-                        if shell == 0:
-                            self.blobs_dtype = self.blobs[-1].dtype
+                    for shell in range(len(self.shell_n)):
+                        self.points.append(
+                            np.array(group['points_{}'.format(shell)]))
+                        self.log_l.append(
+                            np.array(group['log_l_{}'.format(shell)]))
+                        if 'blobs_{}'.format(shell) in group:
+                            if shell == 0:
+                                self.blobs = []
+                            self.blobs.append(
+                                np.array(group['blobs_{}'.format(shell)]))
+                            if shell == 0:
+                                self.blobs_dtype = self.blobs[-1].dtype
 
-                for key in ['shell_t', 'points_t', 'log_l_t', 'blobs_t']:
-                    if key in group:
-                        setattr(self, key, np.array(group[key]))
+                    for key in ['shell_t', 'points_t', 'log_l_t', 'blobs_t']:
+                        if key in group:
+                            setattr(self, key, np.array(group[key]))
 
-                self.bounds = [
-                    UnitCube.read(fstream['bound_0'], rng=self.rng), ]
-                for i in range(1, len(self.shell_n)):
-                    self.bounds.append(NautilusBound.read(
-                        fstream['bound_{}'.format(i)], rng=self.rng))
+                    self.bounds = [
+                        UnitCube.read(fstream['bound_0'], rng=self.rng), ]
+                    for i in range(1, len(self.shell_n)):
+                        self.bounds.append(NautilusBound.read(
+                            fstream['bound_{}'.format(i)], rng=self.rng))
 
     def run(self, f_live=0.01, n_shell=1, n_eff=10000, n_like_max=np.inf,
             discard_exploration=False, timeout=np.inf, verbose=False):
@@ -417,8 +428,8 @@ class Sampler():
             limits were reached and True otherwise.
 
         """
-        #VM BEGINS
-        if rank 0:
+        #KZ BEGINS
+        if is_main_process():
             t_start = time()
 
             if verbose:
@@ -500,17 +511,14 @@ class Sampler():
                 success = (self.explored and np.all(self.shell_n >= n_shell) and
                            self.n_eff >= n_eff)
 
-                #VM 
-                #if no success
-                    #for (int i =1 ; i< MPI_RANK; i++)
-                    #{
-                        #MPI_SEND(FALSE, from rank 0, tag = 2)
-                    #}
-
-            #for (int i =1 ; i< MPI_RANK; i++)
-            #{
-                #MPI_SEND(TRUE, from rank 0, tag = 2)
-            #}
+                #KZ 
+                if not success:
+                    for worker_rank in range(1, self.size):
+                        self.comm.send(False, dest=worker_rank, tag=22)
+            #KZ: send true to tell workers it's finished
+            for worker_rank in range(1, self.size):
+                self.comm.send(True, dest=worker_rank, tag=22)
+                    
             if verbose:
                 if success:
                     self.print_status('Finished')
@@ -522,26 +530,28 @@ class Sampler():
             # all the other ranks
             # they receit args from a MPI_bdcast, they run the likes a assigned to them 
             # then they MPI send their results to rank 0
-            #x = false
-            #while (x = False)
-                #VM MPI_RECEIV ARGS FROM RANK 0
-                # create an args, and results numpy array
-                # MPI_RECEIV(TAG = 0)
-                # NOW - HERE THEY ARE GOING TO EVALUATE THEIR LIKELIHOODS
+            comm = self.MPI.COMM_WORLD
+            rank = comm.Get_rank()
+            # print('KZ testing, I am rank', get_mpi_rank(), rank)
+            finished = False
+            while (finished == False):
+                #KZ receive from manager and evaluate calculation
+                args_length = self.comm.recv(source=0, tag=97)
+                start = self.comm.recv(source=0, tag=98)
+                end   = self.comm.recv(source=0, tag=99)
                 
-                #int m = n_live/n_mpi_workers
-                #for (int i = MPI_RANK; i = i + m; i < n_live)
-                #{
-                #    results[i] = self.likelihood(args[i])
-                #}
+                # print('kz testing, rank{}, start{}, end{}, arg_length{}'.format(rank, start, end, args_length))
 
-                # NOW WE SEND THE RESULTS BACK TO ZERO
-                #for (int i = MPI_RANK; i = i + m; i < n_live)
-                #{
-                #    MPI_SEND(results[i] , to rank 0, TAG = 1)
-                #}
+                args = self.comm.recv(source=0, tag=0)
+                
+                local_args = args[start: end]
+                # print('doing evalution start at rank{}'.format(rank))
+                result_local = list(map(self.likelihood, local_args))
+                # print('doing evalution end at rank{}'.format(rank))
+                #KZ NOW WE SEND THE RESULTS BACK TO ZERO
+                self.comm.send(result_local, dest=0, tag=11)
 
-                #MPI_RECEIV(x, from rank 0, tag = 2)
+                finished = self.comm.recv(source=0, tag=22)
 
     @property
     def discard_exploration(self):
@@ -906,71 +916,62 @@ class Sampler():
             n_elements = len(args)
             size = get_mpi_size()
             rank = get_mpi_rank()
-            mpi  = get_mpi()
-            comm = mpi.COMM_WORLD
+            comm = self.MPI.COMM_WORLD
             chunk_size = n_elements // size
             remainder = n_elements % size
 
             # Determine the start and end indices of the chunk for each process
-            if rank < remainder:
-                start = rank * (chunk_size + 1)
-                end = start + chunk_size + 1
-            else:
-                start = remainder * (chunk_size + 1) + (rank - remainder) * chunk_size
-                end = start + chunk_size
+            def get_start_end_idx_mpi(rank, remainder, chunk_size):
+                if rank < remainder:
+                    start = rank * (chunk_size + 1)
+                    end = start + chunk_size + 1
+                else:
+                    start = remainder * (chunk_size + 1) + (rank - remainder) * chunk_size
+                    end = start + chunk_size
+                
+                return start, end
 
-            # Initialize array on the root process
-            if rank == 0:
-                args = np.arange(n_elements)
-            else:
-                args = None
 
             #VM RANK0 MPI SEND ARGS WITH TAG = 0 TO ALL OTHER RANKS
-            #MPI_SEND(TAG = 0)
+            #KZ make them np array and use Send and Recv (captitalized)
 
+            args_len = len(args)
+            
+            # print('testing types', type(args), type(args[0]))
+            
+            for worker_rank in range(1, self.size):
+                # print("SENDING START")
+                self.comm.send(args_len, dest=worker_rank, tag=97)
+                
+                tmp_start, tmp_end = get_start_end_idx_mpi(worker_rank, remainder, chunk_size)
+                self.comm.send(tmp_start, dest=worker_rank, tag=98)
+                self.comm.send(tmp_end, dest=worker_rank, tag=99)
+
+
+                self.comm.send(args, dest=worker_rank, tag=0)
+                # print("SENDING END")
+                
+            assert rank==0, 'something wrong, this should be zero'
+            start, end = get_start_end_idx_mpi(rank, remainder, chunk_size) # for rank 0
+            local_args = args[start: end]
             # rank 0 all do some likelihood evaluations
-            #for (int i = MPI_RANK; i = i + m; i < n_live)
-            #{
-            #    results[i] = self.likelihood(args[i])
-            #}
-
-            # now ranks 0 receive all the results from the other ranks
-            #for (int i =1 ; i< MPI_RANK; i++)
-            #{
-            #  for (int j = i; j = j + m; j < n_live)
-            #  {
-            #        MPI_RECEIVE(results[j], TAG = 1)
-            #   }
-            #}            
-
-            # Broadcast the entire data array from the root to all processes
-            print('kz tesitng bcast start')
-            args = comm.bcast(args if rank == 0 else None, root=0)
-            print('kz tesitng bcast start')
-            # Each process works only on its specific part
-            local_args = args[start:end]
+            result_local = list(map(self.likelihood, local_args))
             
-            
-            result = list(map(self.likelihood, local_args))
-            print('kz tesitng, logl calculated', get_mpi_rank)
-
-            # Prepare a numpy array on the root to gather all results
-            if rank == 0:
-                all_results = np.empty(n_elements, dtype='int')
-            else:
-                all_results = None
-
-            # Gather all individual results in the root process
-            # We need to prepare a list of the receive counts and displacements for Gatherv
-            recv_counts = [chunk_size + 1 if i < remainder else chunk_size for i in range(size)]
-            displacements = [sum(recv_counts[:i]) for i in range(size)]
-
-            comm.Gatherv(sendbuf=result, recvbuf=(all_results, recv_counts, displacements, MPI.INT), root=0)
+            results_global = np.zeros(args_len)
+            # print('tesitng', rank, start, end, len(result_local))
+            results_global[start: end] = result_local
+            # receive results from other workers
+            for worker_rank in range(1, self.size):
+                tmp = self.comm.recv(source=worker_rank, tag=11)
+                tmp_start, tmp_end = get_start_end_idx_mpi(worker_rank, remainder, chunk_size)
+                results_global[tmp_start: tmp_end] = tmp
+                print('kz test results rank {}, logl {}'.format(worker_rank, tmp))
+                
+            # KZ: to make other part of the code happy
+            result = results_global.tolist()
+            print('kz testing', result[0], results[100], results[100])
 
 
-            result = list(map(self.likelihood, args))
-            print('KZ testing, rank = ', get_mpi_rank(), len(result),'results: ', result[0])
-        
         else:
             result = list(map(self.likelihood, args))
 
