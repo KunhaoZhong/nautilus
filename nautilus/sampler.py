@@ -527,30 +527,30 @@ class Sampler():
 
             return success
         else:
-            #VM: All the other ranks: They receive args from rank.  
+            #VM: All the other ranks: They receive args from rank0.  
             #VM: All the other ranks: They run the likelihoods assigned to them 
-            #VM: All the other ranks: Finally, they send their results back to rank 0
+            #VM: All the other ranks: Finally, they send their results back to rank0
             comm = self.MPI.COMM_WORLD
             rank = comm.Get_rank()
-            # print('KZ testing, I am rank', get_mpi_rank(), rank)
+            
             finished = False
             while (finished == False):
-                #KZ receive from manager and evaluate calculation
+                #VM: rank0 distributes to all ranks the complete args dictionary (tag=0)
+                #VM: rank0 also distributes the range of parameters assigned to each rank>0 (tags=97,98,99)
                 args_length = self.comm.recv(source=0, tag=97)
-                start = self.comm.recv(source=0, tag=98)
-                end   = self.comm.recv(source=0, tag=99)
+                start       = self.comm.recv(source=0, tag=98)
+                end         = self.comm.recv(source=0, tag=99)
                 
-                # print('kz testing, rank{}, start{}, end{}, arg_length{}'.format(rank, start, end, args_length))
-
                 args = self.comm.recv(source=0, tag=0)
                 
-                local_args = args[start: end]
-                # print('doing evalution start at rank{}'.format(rank))
+                local_args = args[start:end]
+                
                 result_local = list(map(self.likelihood, local_args))
-                # print('doing evalution end at rank{}'.format(rank))
-                #KZ NOW WE SEND THE RESULTS BACK TO ZERO
+                
+                #KZ: below, we send computed likelihoods back to rank0
                 self.comm.send(result_local, dest=0, tag=11)
-
+                
+                #VM: below, we check if sampler on rank0 finished sampling
                 finished = self.comm.recv(source=0, tag=22)
 
     @property
