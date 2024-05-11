@@ -527,9 +527,9 @@ class Sampler():
 
             return success
         else:
-            # all the other ranks
-            # they receit args from a MPI_bdcast, they run the likes a assigned to them 
-            # then they MPI send their results to rank 0
+            #VM: All the other ranks: They receive args from rank.  
+            #VM: All the other ranks: They run the likelihoods assigned to them 
+            #VM: All the other ranks: Finally, they send their results back to rank 0
             comm = self.MPI.COMM_WORLD
             rank = comm.Get_rank()
             # print('KZ testing, I am rank', get_mpi_rank(), rank)
@@ -965,11 +965,11 @@ class Sampler():
                 tmp = self.comm.recv(source=worker_rank, tag=11)
                 tmp_start, tmp_end = get_start_end_idx_mpi(worker_rank, remainder, chunk_size)
                 results_global[tmp_start: tmp_end] = tmp
-                print('kz test results rank {}, logl {}'.format(worker_rank, tmp[0]))
+                # print('kz test results rank {}, logl {}'.format(worker_rank, tmp[0]))
                 
             # KZ: to make other part of the code happy
             result = results_global.tolist()
-            print('kz testing', result[0], result[100], result[100])
+            # print('kz testing', result[0], result[100], result[100])
 
 
         else:
